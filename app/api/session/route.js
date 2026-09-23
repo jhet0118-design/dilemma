@@ -15,6 +15,9 @@ export async function POST(req) {
     T: Number(body.payoff?.T ?? 5),
     S: Number(body.payoff?.S ?? 0),
   };
+  // 0 means "no time limit". Otherwise clamp to a sane range.
+  const roundSecondsRaw = parseInt(body.roundSeconds, 10) || 0;
+  const roundSeconds = roundSecondsRaw > 0 ? Math.max(10, Math.min(180, roundSecondsRaw)) : 0;
 
   let code = null;
   for (let i = 0; i < 8; i++) {
@@ -35,6 +38,7 @@ export async function POST(req) {
     currentRound: 0,
     pairingMode,
     payoff,
+    roundSeconds,
     fixedPairs: null,
     createdAt: Date.now(),
   };

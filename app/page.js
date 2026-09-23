@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const LS_TEACHER = "pd_teacher_v1";
 const LS_STUDENT = "pd_student_v1";
@@ -39,6 +39,25 @@ async function postJSON(url, body) {
     body: body ? JSON.stringify(body) : undefined,
   });
   return res;
+}
+
+// Ticks down to a deadline (ms epoch) once a second. Returns null when
+// there's no deadline (untimed round) and 0 once time's up.
+function useCountdown(deadline) {
+  const [remaining, setRemaining] = useState(() =>
+    deadline ? Math.max(0, Math.ceil((deadline - Date.now()) / 1000)) : null
+  );
+  useEffect(() => {
+    if (!deadline) {
+      setRemaining(null);
+      return;
+    }
+    const tick = () => setRemaining(Math.max(0, Math.ceil((deadline - Date.now()) / 1000)));
+    tick();
+    const id = setInterval(tick, 250);
+    return () => clearInterval(id);
+  }, [deadline]);
+  return remaining;
 }
 
 // ---------- root component ----------
@@ -178,7 +197,14 @@ export default function Page() {
     await postJSON(`/api/session/${code}/next`);
   }
   async function chooseMove(choice) {
-    await postJSON(`/api/session/${code}/move`, { playerId: myId, choice });
+    // Tag the move with the round it was made for, so a submission that
+    // arrives late (e.g. an expired timer firing right as the class
+    // auto-advances) can't land in a round it was never meant for.
+    await postJSON(`/api/session/${code}/move`, {
+      playerId: myId,
+      choice,
+      round: data?.meta?.currentRound,
+    });
   }
 
   return (
@@ -245,26 +271,21 @@ function Roster({ items }) {
   );
 }
 
-function anonLabelMap(players) {
-  const ordered = [...players].sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0));
-  const map = {};
-  ordered.forEach((p, i) => {
-    map[p.id] = `참가자 ${i + 1}`;
-  });
-  return map;
-}
-
-function Leaderboard({ players, myId, anonymous }) {
+function Leaderboard({ players, myId }) {
   const ranked = [...players].sort((a, b) => totalScore(b) - totalScore(a));
-  const labels = anonymous ? anonLabelMap(players) : null;
   return (
     <div className="card stack">
       <h3 style={{ fontSize: 19 }}>최종 결과</h3>
+      <p className="lede" style={{ marginTop: -8 }}>
+        라운드 중에는 짝의 이름을 몰랐지만, 이제 전체 결과와 각자의 선택 성향을 공개해요.
+      </p>
       <table>
         <thead>
           <tr>
             <th>순위</th>
             <th>이름</th>
+            <th style={{ textAlign: "right" }}>협력</th>
+            <th style={{ textAlign: "right" }}>배신</th>
             <th style={{ textAlign: "right" }}>총점</th>
           </tr>
         </thead>
@@ -273,8 +294,11 @@ function Leaderboard({ players, myId, anonymous }) {
             <tr key={p.id} className={i === 0 ? "rank-1" : ""}>
               <td>{i + 1}</td>
               <td>
-                {p.id === myId ? "나" : anonymous ? labels[p.id] : p.name}
+                {p.name}
+                {p.id === myId ? " (나)" : ""}
               </td>
+              <td style={{ textAlign: "right" }}>{p.stats?.coop ?? 0}</td>
+              <td style={{ textAlign: "right" }}>{p.stats?.defect ?? 0}</td>
               <td style={{ textAlign: "right" }}>
                 <span className="score-num">{totalScore(p)}</span>
               </td>
@@ -370,6 +394,7 @@ function StudentJoin({ err, onJoin, onBack }) {
 function TeacherSetup({ err, onCreate, onBack }) {
   const [rounds, setRounds] = useState(6);
   const [pairingMode, setPairingMode] = useState("fixed");
+  const [roundSeconds, setRoundSeconds] = useState(30);
   const [R, setR] = useState(3);
   const [P, setP] = useState(1);
   const [T, setT] = useState(5);
@@ -403,6 +428,20 @@ function TeacherSetup({ err, onCreate, onBack }) {
           </div>
         </div>
         <div>
+          <label>라운드 제한 시간(초)</label>
+          <input
+            type="number"
+            min={0}
+            max={180}
+            value={roundSeconds}
+            onChange={(e) => setRoundSeconds(e.target.value)}
+          />
+          <p className="lede" style={{ marginTop: 6, fontSize: 13 }}>
+            시간이 지나도 선택하지 않은 학생은 자동으로 "배신"이 선택돼요. 모두 선택을 마치면(또는
+            시간이 다 되면) 자동으로 다음 라운드로 넘어가요. <strong>0으로 두면 제한 시간이 없어요.</strong>
+          </p>
+        </div>
+        <div>
           <p className="eyebrow" style={{ marginBottom: 10 }}>
             점수표 (각자 얻는 점수)
           </p>
@@ -428,7 +467,9 @@ function TeacherSetup({ err, onCreate, onBack }) {
         {err && <p className="err">{err}</p>}
         <button
           className="primary"
-          onClick={() => onCreate({ totalRounds: rounds, pairingMode, payoff: { R, P, T, S } })}
+          onClick={() =>
+            onCreate({ totalRounds: rounds, pairingMode, roundSeconds, payoff: { R, P, T, S } })
+          }
         >
           게임 만들기
         </button>
@@ -437,6 +478,96 @@ function TeacherSetup({ err, onCreate, onBack }) {
         </button>
       </div>
     </>
+  );
+}
+
+function TeacherPlaying({ meta, players, round, moves, onNext }) {
+  const remaining = useCountdown(round?.deadline || null);
+  const pm = Object.fromEntries(players.map((p) => [p.id, p]));
+
+  const doneCount = (round?.pairs || []).reduce((n, pr) => {
+    if (pr.bye) return n + (moves[pr.a] ? 1 : 0);
+    return n + (moves[pr.a] ? 1 : 0) + (moves[pr.b] ? 1 : 0);
+  }, 0);
+  const totalCount = (round?.pairs || []).reduce((n, pr) => n + (pr.bye ? 1 : 2), 0);
+  const allDone = totalCount > 0 && doneCount === totalCount;
+
+  const ranked = [...players].sort((a, b) => totalScore(b) - totalScore(a));
+
+  return (
+    <div className="card stack">
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        <h3 style={{ fontSize: 18 }}>
+          라운드 {meta.currentRound} / {meta.totalRounds}
+        </h3>
+        {remaining !== null && (
+          <span className={`badge ${remaining <= 5 ? "pulse" : ""}`}>⏱ {remaining}초 남음</span>
+        )}
+      </div>
+
+      {allDone ? (
+        <p className="banner">✅ 모두 선택을 마쳤어요 — 곧 자동으로 다음 라운드로 넘어가요.</p>
+      ) : (
+        <p className="lede" style={{ marginTop: -6 }}>
+          {doneCount}/{totalCount}명 제출 · 모두 제출하거나 시간이 끝나면 자동으로 다음 라운드로
+          넘어가요.
+        </p>
+      )}
+
+      <ul className="roster">
+        {(round?.pairs || []).map((pr, i) => {
+          const aName = pm[pr.a]?.name || "?";
+          const aDone = !!moves[pr.a];
+          const aScore = totalScore(pm[pr.a]);
+          if (pr.bye) {
+            return (
+              <li key={i}>
+                <span>
+                  {aName} ({aScore}점){" "}
+                  <span className="badge" style={{ marginLeft: 6 }}>🤖 컴퓨터 상대</span>
+                </span>
+                <span className={`pill ${aDone ? "done" : "wait"}`}>{aDone ? "완료" : "대기"}</span>
+              </li>
+            );
+          }
+          const bName = pm[pr.b]?.name || "?";
+          const bDone = !!moves[pr.b];
+          const bScore = totalScore(pm[pr.b]);
+          return (
+            <li key={i}>
+              <span>
+                {aName} ({aScore}점) ↔ {bName} ({bScore}점)
+              </span>
+              <span className={`pill ${aDone && bDone ? "done" : "wait"}`}>
+                {aDone && bDone ? "완료" : `${(aDone ? 1 : 0) + (bDone ? 1 : 0)}명 제출`}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+
+      <div>
+        <p className="eyebrow" style={{ marginBottom: 8 }}>
+          실시간 점수
+        </p>
+        <table>
+          <tbody>
+            {ranked.map((p) => (
+              <tr key={p.id}>
+                <td>{p.name}</td>
+                <td style={{ textAlign: "right" }}>
+                  <span className="score-num">{totalScore(p)}</span>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <button className="ghost foot-link" onClick={onNext}>
+        지금 바로 다음 라운드로 넘기기 (수동)
+      </button>
+    </div>
   );
 }
 
@@ -490,46 +621,10 @@ function TeacherLobby({ code, data, notFound, onStart, onNext, onLeave }) {
       )}
 
       {meta.status === "playing" && (
-        <div className="card stack">
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-            <h3 style={{ fontSize: 18 }}>
-              라운드 {meta.currentRound} / {meta.totalRounds}
-            </h3>
-          </div>
-          <p className="lede" style={{ marginTop: -6 }}>
-            학생들이 서로 누구와 짝이 되었는지 알 수 없도록, 이 화면에서도 짝의 이름은 표시하지 않아요.
-          </p>
-          <ul className="roster">
-            {(round?.pairs || []).map((pr, i) => {
-              const aDone = !!moves[pr.a];
-              if (pr.bye) {
-                return (
-                  <li key={i}>
-                    <span>
-                      짝 {i + 1} <span className="badge" style={{ marginLeft: 6 }}>🤖 컴퓨터 상대</span>
-                    </span>
-                    <span className={`pill ${aDone ? "done" : "wait"}`}>{aDone ? "완료" : "대기"}</span>
-                  </li>
-                );
-              }
-              const bDone = !!moves[pr.b];
-              return (
-                <li key={i}>
-                  <span>짝 {i + 1}</span>
-                  <span className={`pill ${aDone && bDone ? "done" : "wait"}`}>
-                    {aDone && bDone ? "완료" : `${(aDone ? 1 : 0) + (bDone ? 1 : 0)}명 제출`}
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
-          <button className="primary" onClick={onNext}>
-            {meta.currentRound >= meta.totalRounds ? "게임 종료하고 결과 보기" : "다음 라운드로"}
-          </button>
-        </div>
+        <TeacherPlaying meta={meta} players={players} round={round} moves={moves} onNext={onNext} />
       )}
 
-      {meta.status === "finished" && <Leaderboard players={players} myId={null} anonymous />}
+      {meta.status === "finished" && <Leaderboard players={players} myId={null} />}
     </>
   );
 }
@@ -572,7 +667,7 @@ function StudentPlay({ code, myId, myName, data, notFound, onChoose, onLeave }) 
     return (
       <>
         <Header eyebrow="게임 종료" title={`수고했어요, ${myName}님`} />
-        <Leaderboard players={players} myId={myId} anonymous />
+        <Leaderboard players={players} myId={myId} />
       </>
     );
   }
@@ -602,6 +697,8 @@ function StudentPlay({ code, myId, myName, data, notFound, onChoose, onLeave }) 
         title={`상대: ${oppName}`}
         lede={pair.bye ? "이번 라운드는 인원이 홀수라 컴퓨터와 대결해요." : "누구와 짝이 되었는지는 끝까지 비밀이에요. 동시에 선택하고, 둘 다 선택하면 결과가 공개돼요."}
       />
+
+      {!myMove && <ChoiceTimer deadline={round?.deadline} onExpire={() => onChoose("D")} />}
 
       {!myMove && (
         <div className="doors">
@@ -651,10 +748,32 @@ function StudentPlay({ code, myId, myName, data, notFound, onChoose, onLeave }) 
             <span className="score-num">{totalScore(me)}</span>
           </div>
           <p className="lede center" style={{ marginTop: 14 }}>
-            선생님이 다음 라운드를 시작할 때까지 기다려주세요.
+            곧 자동으로 다음 라운드로 넘어가요.
           </p>
         </div>
       )}
     </>
+  );
+}
+
+// Shows a live countdown for the current round and fires onExpire once,
+// the moment it hits zero (used to auto-submit "배신" client-side for
+// instant feedback — the server does the same as a safety net).
+function ChoiceTimer({ deadline, onExpire }) {
+  const remaining = useCountdown(deadline || null);
+  const firedRef = useRef(false);
+
+  useEffect(() => {
+    if (remaining === 0 && !firedRef.current) {
+      firedRef.current = true;
+      onExpire();
+    }
+  }, [remaining, onExpire]);
+
+  if (remaining === null) return null;
+  return (
+    <p className={`badge ${remaining <= 5 ? "pulse" : ""}`} style={{ marginBottom: 12 }}>
+      ⏱ 남은 시간 {remaining}초
+    </p>
   );
 }

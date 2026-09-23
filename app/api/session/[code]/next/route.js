@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import kv from "@/lib/kv";
-import { makePairs, TTL_SECONDS } from "@/lib/game";
+import { advanceRound } from "@/lib/advance";
 
-// POST /api/session/:code/next — the teacher advances to the next
-// round, or (past the last round) marks the game finished.
+// POST /api/session/:code/next — the teacher manually forces the game
+// on to the next round (or to "finished" past the last one). Rounds
+// normally advance on their own once everyone's answered or time runs
+// out (see lib/advance.js); this is just an override for the teacher.
 export async function POST(_req, { params }) {
   const { code } = params;
 
@@ -13,22 +15,6 @@ export async function POST(_req, { params }) {
     return NextResponse.json({ error: "not_playing" }, { status: 409 });
   }
 
-  if (meta.currentRound >= meta.totalRounds) {
-    await kv.set(`sess:${code}:meta`, { ...meta, status: "finished" }, { ex: TTL_SECONDS });
-    return NextResponse.json({ ok: true, finished: true });
-  }
-
-  const nextRound = meta.currentRound + 1;
-  let pairs;
-  if (meta.pairingMode === "fixed" && meta.fixedPairs) {
-    pairs = meta.fixedPairs;
-  } else {
-    const playersHash = (await kv.hgetall(`sess:${code}:players`)) || {};
-    pairs = makePairs(Object.keys(playersHash));
-  }
-
-  await kv.set(`sess:${code}:meta`, { ...meta, currentRound: nextRound }, { ex: TTL_SECONDS });
-  await kv.set(`sess:${code}:round:${nextRound}`, { pairs, createdAt: Date.now() }, { ex: TTL_SECONDS });
-
-  return NextResponse.json({ ok: true });
+  const updated = await advanceRound(code, meta, { force: true });
+  return NextResponse.json({ ok: true, finished: (updated || meta).status === "finished" });
 }
