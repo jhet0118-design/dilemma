@@ -455,9 +455,20 @@ function TeacherLobby({ code, data, notFound, onStart, onNext, onLeave }) {
 
   const { meta, players, round, moves } = data;
 
+  function handleNewGame() {
+    if (window.confirm("지금 게임 화면을 나가고 새 게임을 만들까요? (기존 게임 코드는 더 이상 이 화면에서 관리할 수 없어요)")) {
+      onLeave();
+    }
+  }
+
   return (
     <>
-      <Header eyebrow="선생님 화면" title="죄수의 딜레마 진행 중" />
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
+        <Header eyebrow="선생님 화면" title="죄수의 딜레마 진행 중" />
+        <button className="ghost foot-link" style={{ marginTop: 4 }} onClick={handleNewGame}>
+          다른 게임 만들기
+        </button>
+      </div>
       <div className="card center" style={{ marginBottom: 18 }}>
         <p className="eyebrow">게임 코드</p>
         <span className="code-stamp">{code}</span>
