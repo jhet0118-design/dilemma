@@ -245,8 +245,18 @@ function Roster({ items }) {
   );
 }
 
-function Leaderboard({ players, myId }) {
+function anonLabelMap(players) {
+  const ordered = [...players].sort((a, b) => (a.joinedAt || 0) - (b.joinedAt || 0));
+  const map = {};
+  ordered.forEach((p, i) => {
+    map[p.id] = `참가자 ${i + 1}`;
+  });
+  return map;
+}
+
+function Leaderboard({ players, myId, anonymous }) {
   const ranked = [...players].sort((a, b) => totalScore(b) - totalScore(a));
+  const labels = anonymous ? anonLabelMap(players) : null;
   return (
     <div className="card stack">
       <h3 style={{ fontSize: 19 }}>최종 결과</h3>
@@ -263,8 +273,7 @@ function Leaderboard({ players, myId }) {
             <tr key={p.id} className={i === 0 ? "rank-1" : ""}>
               <td>{i + 1}</td>
               <td>
-                {p.name}
-                {p.id === myId ? " (나)" : ""}
+                {p.id === myId ? "나" : anonymous ? labels[p.id] : p.name}
               </td>
               <td style={{ textAlign: "right" }}>
                 <span className="score-num">{totalScore(p)}</span>
@@ -445,7 +454,6 @@ function TeacherLobby({ code, data, notFound, onStart, onNext, onLeave }) {
   if (!data) return <p className="lede pulse">게임 정보를 불러오는 중…</p>;
 
   const { meta, players, round, moves } = data;
-  const pm = Object.fromEntries(players.map((p) => [p.id, p]));
 
   return (
     <>
@@ -477,27 +485,26 @@ function TeacherLobby({ code, data, notFound, onStart, onNext, onLeave }) {
               라운드 {meta.currentRound} / {meta.totalRounds}
             </h3>
           </div>
+          <p className="lede" style={{ marginTop: -6 }}>
+            학생들이 서로 누구와 짝이 되었는지 알 수 없도록, 이 화면에서도 짝의 이름은 표시하지 않아요.
+          </p>
           <ul className="roster">
             {(round?.pairs || []).map((pr, i) => {
-              const aName = pm[pr.a]?.name || "?";
               const aDone = !!moves[pr.a];
               if (pr.bye) {
                 return (
                   <li key={i}>
                     <span>
-                      {aName} <span className="badge" style={{ marginLeft: 6 }}>🤖 컴퓨터 상대</span>
+                      짝 {i + 1} <span className="badge" style={{ marginLeft: 6 }}>🤖 컴퓨터 상대</span>
                     </span>
                     <span className={`pill ${aDone ? "done" : "wait"}`}>{aDone ? "완료" : "대기"}</span>
                   </li>
                 );
               }
-              const bName = pm[pr.b]?.name || "?";
               const bDone = !!moves[pr.b];
               return (
                 <li key={i}>
-                  <span>
-                    {aName} ↔ {bName}
-                  </span>
+                  <span>짝 {i + 1}</span>
                   <span className={`pill ${aDone && bDone ? "done" : "wait"}`}>
                     {aDone && bDone ? "완료" : `${(aDone ? 1 : 0) + (bDone ? 1 : 0)}명 제출`}
                   </span>
@@ -511,7 +518,7 @@ function TeacherLobby({ code, data, notFound, onStart, onNext, onLeave }) {
         </div>
       )}
 
-      {meta.status === "finished" && <Leaderboard players={players} myId={null} />}
+      {meta.status === "finished" && <Leaderboard players={players} myId={null} anonymous />}
     </>
   );
 }
@@ -554,7 +561,7 @@ function StudentPlay({ code, myId, myName, data, notFound, onChoose, onLeave }) 
     return (
       <>
         <Header eyebrow="게임 종료" title={`수고했어요, ${myName}님`} />
-        <Leaderboard players={players} myId={myId} />
+        <Leaderboard players={players} myId={myId} anonymous />
       </>
     );
   }
@@ -575,14 +582,14 @@ function StudentPlay({ code, myId, myName, data, notFound, onChoose, onLeave }) 
   const myMove = moves[myId];
   const oppId = pair.partnerId;
   const oppMove = pair.bye ? (myMove ? { choice: myMove.botChoice } : null) : oppId ? moves[oppId] : null;
-  const oppName = pair.bye ? "🤖 컴퓨터" : pm[oppId]?.name || "상대";
+  const oppName = pair.bye ? "🤖 컴퓨터" : "익명의 상대";
 
   return (
     <>
       <Header
-        eyebrow={`라운드 ${meta.currentRound} / ${meta.totalRounds}`}
+        eyebrow={`라운드 ${meta.currentRound}`}
         title={`상대: ${oppName}`}
-        lede={pair.bye ? "이번 라운드는 인원이 홀수라 컴퓨터와 대결해요." : "동시에 선택하고, 둘 다 선택하면 결과가 공개돼요."}
+        lede={pair.bye ? "이번 라운드는 인원이 홀수라 컴퓨터와 대결해요." : "누구와 짝이 되었는지는 끝까지 비밀이에요. 동시에 선택하고, 둘 다 선택하면 결과가 공개돼요."}
       />
 
       {!myMove && (
