@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 const LS_TEACHER = "pd_teacher_v1";
 const LS_STUDENT = "pd_student_v1";
@@ -104,36 +104,37 @@ export default function Page() {
       const myMove = data.moves?.[myId];
       if (myMove) {
         const oppMove = pair.bye ? myMove : data.moves?.[pair.partnerId];
-        if (!oppMove) return 1200; // waiting on partner: poll fast
+        if (!oppMove) return 900; // waiting on partner: poll fast
       }
     }
-    return 2200;
+    return 1500;
   }, [data, myId]);
+
+  // Pulled out of the polling effect so an action (submitting a move,
+  // starting the game, …) can trigger an immediate refresh instead of
+  // waiting for the next scheduled tick — that's what makes the other
+  // side's answer (and the confirmation of your own) show up right away
+  // instead of up to ~2 seconds late.
+  const fetchState = useCallback(async () => {
+    if (!code) return;
+    try {
+      const res = await fetch(`/api/session/${code}`, { cache: "no-store" });
+      if (res.status === 404) {
+        setNotFound(true);
+        return;
+      }
+      const json = await res.json();
+      setData(json);
+      setNotFound(false);
+    } catch {}
+  }, [code]);
 
   useEffect(() => {
     if (!code) return;
-    let active = true;
-    async function tick() {
-      try {
-        const res = await fetch(`/api/session/${code}`, { cache: "no-store" });
-        if (res.status === 404) {
-          if (active) setNotFound(true);
-          return;
-        }
-        const json = await res.json();
-        if (active) {
-          setData(json);
-          setNotFound(false);
-        }
-      } catch {}
-    }
-    tick();
-    const id = setInterval(tick, pollMs);
-    return () => {
-      active = false;
-      clearInterval(id);
-    };
-  }, [code, pollMs]);
+    fetchState();
+    const id = setInterval(fetchState, pollMs);
+    return () => clearInterval(id);
+  }, [code, pollMs, fetchState]);
 
   function leaveToRoleScreen() {
     localStorage.removeItem(LS_TEACHER);
@@ -192,9 +193,11 @@ export default function Page() {
 
   async function startGame() {
     await postJSON(`/api/session/${code}/start`);
+    fetchState();
   }
   async function nextRound() {
     await postJSON(`/api/session/${code}/next`);
+    fetchState();
   }
   async function chooseMove(choice) {
     // Tag the move with the round it was made for, so a submission that
@@ -205,6 +208,7 @@ export default function Page() {
       choice,
       round: data?.meta?.currentRound,
     });
+    fetchState(); // don't wait for the next poll tick to confirm it landed
   }
 
   return (
@@ -437,8 +441,9 @@ function TeacherSetup({ err, onCreate, onBack }) {
             onChange={(e) => setRoundSeconds(e.target.value)}
           />
           <p className="lede" style={{ marginTop: 6, fontSize: 13 }}>
-            시간이 지나도 선택하지 않은 학생은 자동으로 "배신"이 선택돼요. 모두 선택을 마치면(또는
-            시간이 다 되면) 자동으로 다음 라운드로 넘어가요. <strong>0으로 두면 제한 시간이 없어요.</strong>
+            시간이 지나도 선택하지 않은 학생은 자동으로 "배신"이 선택돼요. 일찍 끝난 학생도 제한
+            시간이 다 될 때까지 기다렸다가, 반 전체가 함께 다음 라운드로 넘어가요.{" "}
+            <strong>0으로 두면 제한 시간이 없고, 모두 선택하는 즉시 다음 라운드로 넘어가요.</strong>
           </p>
         </div>
         <div>
@@ -506,11 +511,17 @@ function TeacherPlaying({ meta, players, round, moves, onNext }) {
       </div>
 
       {allDone ? (
-        <p className="banner">✅ 모두 선택을 마쳤어요 — 곧 자동으로 다음 라운드로 넘어가요.</p>
+        <p className="banner">
+          {round?.deadline
+            ? "✅ 모두 선택을 마쳤어요 — 제한 시간이 끝나면 다 함께 다음 라운드로 넘어가요."
+            : "✅ 모두 선택을 마쳤어요 — 곧 자동으로 다음 라운드로 넘어가요."}
+        </p>
       ) : (
         <p className="lede" style={{ marginTop: -6 }}>
-          {doneCount}/{totalCount}명 제출 · 모두 제출하거나 시간이 끝나면 자동으로 다음 라운드로
-          넘어가요.
+          {doneCount}/{totalCount}명 제출 ·{" "}
+          {round?.deadline
+            ? "제한 시간이 끝나면 다 함께 다음 라운드로 넘어가요."
+            : "모두 제출하면 자동으로 다음 라운드로 넘어가요."}
         </p>
       )}
 
@@ -630,6 +641,21 @@ function TeacherLobby({ code, data, notFound, onStart, onNext, onLeave }) {
 }
 
 function StudentPlay({ code, myId, myName, data, notFound, onChoose, onLeave }) {
+  // Optimistic "I just clicked" state: shows instantly, before the
+  // network round-trip finishes and the next poll confirms it, so a
+  // click never looks like it didn't register. Keyed to the round so a
+  // stale optimistic choice can't bleed into the next round.
+  const [optimistic, setOptimistic] = useState(null); // { round, choice }
+  const currentRound = data?.meta?.currentRound;
+  useEffect(() => {
+    setOptimistic(null);
+  }, [currentRound]);
+
+  function pick(choice) {
+    setOptimistic({ round: currentRound, choice });
+    onChoose(choice);
+  }
+
   if (notFound) {
     return (
       <div className="card stack">
@@ -685,9 +711,11 @@ function StudentPlay({ code, myId, myName, data, notFound, onChoose, onLeave }) 
     );
   }
 
-  const myMove = moves[myId];
+  const pendingMove =
+    optimistic && optimistic.round === meta.currentRound ? { choice: optimistic.choice, pending: true } : null;
+  const myMove = moves[myId] || pendingMove;
   const oppId = pair.partnerId;
-  const oppMove = pair.bye ? (myMove ? { choice: myMove.botChoice } : null) : oppId ? moves[oppId] : null;
+  const oppMove = pair.bye ? (myMove && !myMove.pending ? { choice: myMove.botChoice } : null) : oppId ? moves[oppId] : null;
   const oppName = pair.bye ? "🤖 컴퓨터" : "익명의 상대";
 
   return (
@@ -698,16 +726,16 @@ function StudentPlay({ code, myId, myName, data, notFound, onChoose, onLeave }) 
         lede={pair.bye ? "이번 라운드는 인원이 홀수라 컴퓨터와 대결해요." : "누구와 짝이 되었는지는 끝까지 비밀이에요. 동시에 선택하고, 둘 다 선택하면 결과가 공개돼요."}
       />
 
-      {!myMove && <ChoiceTimer deadline={round?.deadline} onExpire={() => onChoose("D")} />}
+      {!myMove && <ChoiceTimer deadline={round?.deadline} onExpire={() => pick("D")} />}
 
       {!myMove && (
         <div className="doors">
-          <div className="door coop" onClick={() => onChoose("C")}>
+          <div className="door coop" onClick={() => pick("C")}>
             <span className="glyph">🤝</span>
             <span className="label">협력</span>
             <span className="sub">함께 신뢰를 지켜요</span>
           </div>
-          <div className="door betray" onClick={() => onChoose("D")}>
+          <div className="door betray" onClick={() => pick("D")}>
             <span className="glyph">🗡️</span>
             <span className="label">배신</span>
             <span className="sub">혼자 이득을 노려요</span>
@@ -719,7 +747,10 @@ function StudentPlay({ code, myId, myName, data, notFound, onChoose, onLeave }) 
         <div className="card center stack">
           <p className="eyebrow">내 선택</p>
           <h2 style={{ fontSize: 22 }}>{fmtChoice(myMove.choice)}</h2>
-          <p className="lede pulse">상대의 선택을 기다리는 중…</p>
+          <p className="lede pulse">
+            {myMove.pending ? "선택을 전송하는 중…" : "상대의 선택을 기다리는 중…"}
+          </p>
+          <CountdownBadge deadline={round?.deadline} />
         </div>
       )}
 
@@ -748,11 +779,28 @@ function StudentPlay({ code, myId, myName, data, notFound, onChoose, onLeave }) 
             <span className="score-num">{totalScore(me)}</span>
           </div>
           <p className="lede center" style={{ marginTop: 14 }}>
-            곧 자동으로 다음 라운드로 넘어가요.
+            {round?.deadline
+              ? "제한 시간이 끝나면 반 전체가 함께 다음 라운드로 넘어가요."
+              : "곧 자동으로 다음 라운드로 넘어가요."}
           </p>
+          <div className="center">
+            <CountdownBadge deadline={round?.deadline} />
+          </div>
         </div>
       )}
     </>
+  );
+}
+
+// A passive countdown badge — no auto-submit, just lets someone who's
+// already answered see why they're still waiting on the room.
+function CountdownBadge({ deadline }) {
+  const remaining = useCountdown(deadline || null);
+  if (remaining === null) return null;
+  return (
+    <p className={`badge ${remaining <= 5 ? "pulse" : ""}`} style={{ marginTop: 10 }}>
+      ⏱ 제한 시간 {remaining}초 남음
+    </p>
   );
 }
 
