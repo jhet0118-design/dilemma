@@ -324,8 +324,8 @@ function RoleSelect({ onPick }) {
   return (
     <>
       <Header
-        eyebrow="죄수의 딜레마 · 교실 실험"
-        title="딜레마 교실"
+        eyebrow="실시간 교실 게임"
+        title="협력 또는 배신"
         lede="학급 전체가 동시에 짝을 지어 협력과 배신을 선택하는 실시간 게임이에요. 선생님이 게임을 만들고, 학생들은 코드로 참여해요."
       />
       <div className="role-pick">
@@ -606,7 +606,7 @@ function TeacherLobby({ code, data, notFound, onStart, onNext, onLeave }) {
   return (
     <>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start" }}>
-        <Header eyebrow="선생님 화면" title="죄수의 딜레마 진행 중" />
+        <Header eyebrow="선생님 화면" title="협력 또는 배신 진행 중" />
         <button className="ghost foot-link" style={{ marginTop: 4 }} onClick={handleNewGame}>
           다른 게임 만들기
         </button>

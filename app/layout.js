@@ -1,8 +1,8 @@
 import "./globals.css";
 
 export const metadata = {
-  title: "딜레마 교실",
-  description: "학급 전체가 실시간으로 짝을 지어 협력과 배신을 선택하는 죄수의 딜레마 교실 게임",
+  title: "협력 또는 배신",
+  description: "학급 전체가 실시간으로 짝을 지어 협력과 배신을 선택하는 교실 게임",
 };
 
 export const viewport = {

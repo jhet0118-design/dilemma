@@ -1,6 +1,6 @@
-# 딜레마 교실
+# 협력 또는 배신
 
-로그인 없이, 각자 기기로 참여하는 실시간 죄수의 딜레마 교실 게임입니다.
+로그인 없이, 각자 기기로 참여하는 실시간 교실 게임입니다.
 Next.js + Vercel KV(Redis)로 만들어져 있어서, 학생들은 회원가입 없이 4자리
 코드와 별명만으로 참여하고, 서버(Vercel)를 거쳐 실제로 실시간 동기화됩니다.
 
@@ -13,7 +13,7 @@ Next.js + Vercel KV(Redis)로 만들어져 있어서, 학생들은 회원가입 
 ```bash
 git init
 git add .
-git commit -m "딜레마 교실 초기 커밋"
+git commit -m "협력 또는 배신 초기 커밋"
 ```
 
 GitHub에서 새 저장소(예: `dilemma-classroom`)를 만든 뒤:
