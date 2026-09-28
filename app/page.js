@@ -98,6 +98,10 @@ export default function Page() {
 
   const pollMs = useMemo(() => {
     if (!data?.meta) return 2500;
+    // Poll the lobby quickly so "게임 시작" is picked up almost
+    // instantly — a slow lobby poll was eating into round 1's time
+    // limit before students even saw the choice screen.
+    if (data.meta.status === "lobby") return 1000;
     if (data.meta.status !== "playing") return 3000;
     const pair = myPairInfo(data.round, myId);
     if (pair) {
@@ -277,12 +281,42 @@ function Roster({ items }) {
 
 function Leaderboard({ players, myId }) {
   const ranked = [...players].sort((a, b) => totalScore(b) - totalScore(a));
+  const totalCoop = players.reduce((s, p) => s + (p.stats?.coop ?? 0), 0);
+  const totalDefect = players.reduce((s, p) => s + (p.stats?.defect ?? 0), 0);
+  const totalMoves = totalCoop + totalDefect;
+  const coopPct = totalMoves ? Math.round((totalCoop / totalMoves) * 100) : 0;
   return (
     <div className="card stack">
       <h3 style={{ fontSize: 19 }}>최종 결과</h3>
       <p className="lede" style={{ marginTop: -8 }}>
         라운드 중에는 짝의 이름을 몰랐지만, 이제 전체 결과와 각자의 선택 성향을 공개해요.
       </p>
+      <div className="row" style={{ marginBottom: 4 }}>
+        <div className="card center" style={{ padding: 14 }}>
+          <p className="eyebrow" style={{ marginBottom: 4 }}>
+            전체 협력
+          </p>
+          <span className="score-num" style={{ fontSize: 22 }}>
+            {totalCoop}회
+          </span>
+        </div>
+        <div className="card center" style={{ padding: 14 }}>
+          <p className="eyebrow" style={{ marginBottom: 4 }}>
+            전체 배신
+          </p>
+          <span className="score-num" style={{ fontSize: 22 }}>
+            {totalDefect}회
+          </span>
+        </div>
+        <div className="card center" style={{ padding: 14 }}>
+          <p className="eyebrow" style={{ marginBottom: 4 }}>
+            협력 비율
+          </p>
+          <span className="score-num" style={{ fontSize: 22 }}>
+            {coopPct}%
+          </span>
+        </div>
+      </div>
       <table>
         <thead>
           <tr>
@@ -716,14 +750,17 @@ function StudentPlay({ code, myId, myName, data, notFound, onChoose, onLeave }) 
   const myMove = moves[myId] || pendingMove;
   const oppId = pair.partnerId;
   const oppMove = pair.bye ? (myMove && !myMove.pending ? { choice: myMove.botChoice } : null) : oppId ? moves[oppId] : null;
-  const oppName = pair.bye ? "🤖 컴퓨터" : "익명의 상대";
+  // Never let a student tell whether they're facing another student or
+  // the computer (the odd-one-out case) — same label, same wording,
+  // either way.
+  const oppName = "익명의 상대";
 
   return (
     <>
       <Header
         eyebrow={`라운드 ${meta.currentRound}`}
         title={`상대: ${oppName}`}
-        lede={pair.bye ? "이번 라운드는 인원이 홀수라 컴퓨터와 대결해요." : "누구와 짝이 되었는지는 끝까지 비밀이에요. 동시에 선택하고, 둘 다 선택하면 결과가 공개돼요."}
+        lede="누구와 짝이 되었는지는 끝까지 비밀이에요. 동시에 선택하고, 둘 다 선택하면 결과가 공개돼요."
       />
 
       {!myMove && <ChoiceTimer deadline={round?.deadline} onExpire={() => pick("D")} />}
